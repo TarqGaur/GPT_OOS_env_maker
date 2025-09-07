@@ -1,0 +1,21 @@
+{
+    "start_time": 1757277575.1234794,
+    "target_commands": [
+        "pip install tensorflow==1.5.0",
+        "pip install keras==2.0.0"
+    ],
+    "target_packages": [
+        "keras",
+        "tensorflow"
+    ],
+    "iterations": [],
+    "final_status": "resolved",
+    "resolution_successful": true,
+    "total_iterations": 1,
+    "end_time": 1757278218.9330254,
+    "total_duration": 643.8095459938049,
+    "failed_packages_detected": [
+        "keras",
+        "tensorflow"
+    ]
+}

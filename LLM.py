@@ -1,31 +1,20 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 from openai import OpenAI
 import json
 import re
 import os
+import requests
+from bs4 import BeautifulSoup
+from serpapi import GoogleSearch
+from requests.adapters import HTTPAdapter, Retry
 
 client = OpenAI(
     base_url="https://router.huggingface.co/v1",
-    api_key="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"  
+    api_key="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"  
 )
 
-# Enhanced system prompt that teaches the model about memory access
+# Enhanced system prompt that teaches the model about memory access AND web search
 system_prompt = """
-You are an AI assistant with access to a memory system. You MUST respond in **strict JSON format** only.
+You are an AI assistant with access to a memory system AND web search capability. You MUST respond in **strict JSON format** only.
 
 CRITICAL: Your response must be VALID JSON that can be parsed by json.loads(). Do not include any text before or after the JSON object.
 
@@ -35,11 +24,18 @@ MEMORY ACCESS RULES:
 - To request memory access, include in your main_response: "NEED_MEMORY: [index1, index2, ...]"
 - Available memory indices will be shown in the memory_summary
 
+WEB SEARCH RULES:
+- If you need current information, real-time data, or information not in your training, you can request web search
+- To request web search, include in your main_response: "NEED_SEARCH: search_query_here"
+- You can request both memory access AND web search in the same response
+- Web search will provide you with current information from multiple sources
+
 Follow this exact JSON schema:
 
 {
-  "main_response": "your response here, include NEED_MEMORY: [indices] if you need older memories",
+  "main_response": "your response here, include NEED_MEMORY: [indices] and/or NEED_SEARCH: query if needed",
   "memory_request": ["index1", "index2"] or null,
+  "search_request": "search_query" or null,
   "summarize_answer_prompt_in_100_words": "summarize your answer in 100 words",
   "summarize_question_prompt_in_100_words": "summarize the user's question in 100 words"
 }
@@ -48,15 +44,74 @@ CRITICAL RULES:
 1. ONLY return valid JSON - nothing else
 2. Do not include markdown formatting, code blocks, or explanations outside JSON
 3. If you don't need memory access, set "memory_request" to null
-4. If you need specific memories, list the indices in "memory_request" array
-5. Always provide a complete response in "main_response"
-6. Escape all quotes and special characters properly in JSON strings
+4. If you don't need web search, set "search_request" to null
+5. If you need specific memories, list the indices in "memory_request" array
+6. If you need web search, provide a clear search query in "search_request"
+7. Always provide a complete response in "main_response"
+8. Escape all quotes and special characters properly in JSON strings
 """
 
 # Global variables for multiple histories
 histories = {}
 current_history = "default"
 q_counters = {}
+
+def scrap(search_query):
+    """Enhanced web scraping function with better error handling"""
+    try:
+        session = requests.Session()
+        retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/115.0 Safari/537.36"
+        }
+
+        params = {
+            "engine": "google",
+            "q": search_query,   
+            "hl": "en",
+            "gl": "us",
+            "num": "3",     
+            "api_key": "d71b08519c184d0b2d7d339e7c0e4dba161f48c0095680ae57419a6f70d3d501"
+        }
+
+        print(f"🔍 Searching for: {search_query}")
+        search = GoogleSearch(params)
+        results = search.get_dict()
+
+        organic_results = results.get("organic_results", [])[:3]
+        total_data = []
+
+        for i, result in enumerate(organic_results, start=1):
+            try:
+                url = result.get("link")
+                title = result.get("title")
+                print(f"🔗 Site {i}: {title}\nURL: {url}")
+                
+                response = session.get(url, headers=headers, timeout=20)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, "html.parser")
+
+                # Extract text from paragraphs and limit length
+                text = " ".join([p.get_text().strip() for p in soup.find_all("p")])
+                if len(text) > 2000:  # Limit text length to avoid token limits
+                    text = text[:2000] + "..."
+                
+                total_data.append({
+                    "title": title,
+                    "url": url,
+                    "content": text
+                })
+            except Exception as site_error:
+                print(f"❌ Error scraping site {i}: {site_error}")
+                continue
+
+        return total_data
+    except Exception as e:
+        print(f"❌ Web search error: {e}")
+        return []
 
 def safe_json_parse(content):
     """Safely parse JSON content with fallback handling"""
@@ -90,6 +145,7 @@ def safe_json_parse(content):
         return {
             "main_response": content,
             "memory_request": None,
+            "search_request": None,
             "summarize_answer_prompt_in_100_words": "Failed to parse JSON response from AI model",
             "summarize_question_prompt_in_100_words": "User query that resulted in unparseable response",
             "parsing_error": str(e),
@@ -131,8 +187,8 @@ def create_memory_summary(history_name=None):
         user_msg = conv['user'][:100] + "..." if len(conv['user']) > 100 else conv['user']
         summary += f"Index {idx}: User asked about: {user_msg}\n"
     
-    # Add recent context (last 2 conversations)
-    last_keys = list(history.keys())[-2:]
+    # Add recent context (last 5 conversations)
+    last_keys = list(history.keys())[-5:]
     if last_keys:
         summary += "\nRecent Context:\n"
         for key in last_keys:
@@ -156,8 +212,8 @@ def get_detailed_memory(indices, history_name=None):
             detailed_memories[idx] = history[str(idx)]
     return detailed_memories
 
-def send_with_memory_access(user_msg, history_name=None):
-    """Enhanced send function with dynamic memory access"""
+def send_with_enhanced_access(user_msg, history_name=None):
+    """Enhanced send function with dynamic memory access AND web search"""
     if history_name is None:
         history_name = current_history
         
@@ -174,29 +230,60 @@ def send_with_memory_access(user_msg, history_name=None):
         response = client.chat.completions.create(
             model="openai/gpt-oss-120b",
             messages=initial_messages,
-            temperature=0.1,  # Lower temperature for more consistent JSON
+            temperature=0.1,
         )
 
         raw_content = response.choices[0].message.content.strip()
         parsed_content = safe_json_parse(raw_content)
         
-        # Step 2: Check if model requested specific memories
+        # Step 2: Check if model requested specific memories or web search
         memory_request = parsed_content.get('memory_request')
+        search_request = parsed_content.get('search_request')
         
+        # Collect additional data
+        additional_data = {}
+        
+        # Handle memory request
         if memory_request and isinstance(memory_request, list) and len(memory_request) > 0:
             print(f"🧠 AI requested memory access for indices: {memory_request}")
-            
-            # Get detailed memories
-            detailed_memories = get_detailed_memory(memory_request, history_name)
-            
-            # Step 3: Send follow-up request with detailed memories
+            additional_data['detailed_memories'] = get_detailed_memory(memory_request, history_name)
+        
+        # Handle search request
+        if search_request and isinstance(search_request, str) and search_request.strip():
+            print(f"🌐 AI requested web search for: {search_request}")
+            search_results = scrap(search_request.strip())
+            additional_data['search_results'] = search_results
+        
+        # Step 3: Send follow-up request with additional data if any was requested
+        if additional_data:
             followup_messages = [
-                {"role": "system", "content": system_prompt.replace("NEED_MEMORY: [indices] if you need older memories", "provide your final answer")},
+                {"role": "system", "content": system_prompt.replace(
+                    "include NEED_MEMORY: [indices] and/or NEED_SEARCH: query if needed", 
+                    "provide your final answer using the additional information provided"
+                )},
                 {"role": "user", "content": f"Original Question: {user_msg}"},
-                {"role": "user", "content": f"Memory Summary: {memory_summary}"},
-                {"role": "user", "content": f"Detailed Memories Requested: {json.dumps(detailed_memories, indent=2)}"},
-                {"role": "user", "content": "Now provide your complete final answer based on all available information."}
+                {"role": "user", "content": f"Memory Summary: {memory_summary}"}
             ]
+            
+            if 'detailed_memories' in additional_data:
+                followup_messages.append({
+                    "role": "user", 
+                    "content": f"Detailed Memories: {json.dumps(additional_data['detailed_memories'], indent=2)}"
+                })
+            
+            if 'search_results' in additional_data:
+                search_content = ""
+                for i, result in enumerate(additional_data['search_results'], 1):
+                    search_content += f"\nSource {i}: {result['title']}\nURL: {result['url']}\nContent: {result['content']}\n"
+                followup_messages.append({
+                    "role": "user",
+                    "content": f"Web Search Results: {search_content}"
+                })
+            
+            followup_messages.append({
+                "role": "user",
+                "content": "Now provide your complete final answer based on all available information."
+            })
 
             final_response = client.chat.completions.create(
                 model="openai/gpt-oss-120b",
@@ -206,7 +293,11 @@ def send_with_memory_access(user_msg, history_name=None):
 
             final_content = safe_json_parse(final_response.choices[0].message.content.strip())
             
-            print("AI (with memory access):", final_content.get("main_response", "No response"))
+            # Add metadata about what was used
+            final_content['used_memory'] = bool(memory_request)
+            final_content['used_search'] = bool(search_request)
+            
+            print("AI (with enhanced access):", final_content.get("main_response", "No response"))
             return final_content
         else:
             print("AI:", parsed_content.get("main_response", "No response"))
@@ -218,9 +309,14 @@ def send_with_memory_access(user_msg, history_name=None):
             "error": str(e), 
             "main_response": f"Error occurred: {e}",
             "memory_request": None,
+            "search_request": None,
             "summarize_answer_prompt_in_100_words": f"Error in AI communication: {str(e)}",
             "summarize_question_prompt_in_100_words": f"User query that caused error: {user_msg[:100]}"
         }
+
+def send_with_memory_access(user_msg, history_name=None):
+    """Original memory-only access function (for backward compatibility)"""
+    return send_with_enhanced_access(user_msg, history_name)
 
 def send_simple(user_msg, history_name=None):
     """Original simple send function (for comparison)"""
@@ -245,7 +341,16 @@ def send_simple(user_msg, history_name=None):
             temperature=0.1,
         )
 
-        raw_content = response.choices[0].message.content.strip()
+        # Safely extract content with null checks
+        if response and response.choices and len(response.choices) > 0:
+            raw_content = response.choices[0].message.content
+            if raw_content is not None:
+                raw_content = raw_content.strip()
+            else:
+                raw_content = None
+        else:
+            raw_content = None
+
         parsed_content = safe_json_parse(raw_content)
         print("AI:", parsed_content.get("main_response", "No response"))
         return parsed_content
@@ -256,6 +361,7 @@ def send_simple(user_msg, history_name=None):
             "error": str(e),
             "main_response": f"Error occurred: {e}",
             "memory_request": None,
+            "search_request": None,
             "summarize_answer_prompt_in_100_words": f"Error in AI communication: {str(e)}",
             "summarize_question_prompt_in_100_words": f"User query that caused error: {user_msg[:100]}"
         }
@@ -307,8 +413,8 @@ def load_history_from_file(filename, history_name=None):
         print(f"❌ Error loading history: {e}")
         return False
 
-def addhistory(user_msg, use_memory_access=True, history_name=None, save_to_file=None):
-    """Add conversation to history with optional memory access and file saving"""
+def addhistory(user_msg, use_enhanced_access=True, history_name=None, save_to_file=None):
+    """Add conversation to history with optional enhanced access (memory + web search) and file saving"""
     if history_name is None:
         history_name = current_history
     
@@ -324,8 +430,8 @@ def addhistory(user_msg, use_memory_access=True, history_name=None, save_to_file
     q_counters[history_name] += 1
     q = q_counters[history_name]
 
-    if use_memory_access:
-        llm_reply = send_with_memory_access(user_msg, history_name)
+    if use_enhanced_access:
+        llm_reply = send_with_enhanced_access(user_msg, history_name)
     else:
         llm_reply = send_simple(user_msg, history_name)
 
@@ -376,13 +482,41 @@ def show_commands():
     print("/clear [history_name] - Clear history (current if none specified)")
     print("/save <filename> [history_name] - Save history to file")
     print("/load <filename> [history_name] - Load history from file")
-    print("/simple - Toggle simple mode (no memory access)")
+    print("/simple - Toggle simple mode (no memory/search access)")
+    print("/search <query> - Test web search functionality")
     print("/help - Show this help")
     print("/quit - Exit the program")
+    print("\n🌟 New Features:")
+    print("- AI can now request web search for current information")
+    print("- Enhanced access mode includes both memory and web search")
+    print("- Search results are integrated into AI responses")
     print("\nUsage Examples:")
-    print("  addhistory('Hello', True, 'chat1', 'chat1.json')")
-    print("  /switch project_work")
-    print("  /save backup.json")
+    print("  addhistory('What is the current weather in New York?', True, 'weather_chat')")
+    print("  addhistory('Tell me about recent AI developments', True)")
+    print("  /search 'latest OpenAI news'")
+
+# Test function for web search
+def test_search(query):
+    """Test the web search functionality"""
+    print(f"\n🧪 Testing search for: {query}")
+    results = scrap(query)
+    for i, result in enumerate(results, 1):
+        print(f"\nResult {i}:")
+        print(f"Title: {result['title']}")
+        print(f"URL: {result['url']}")
+        print(f"Content: {result['content'][:300]}...")
+    return results
 
 # Initialize default history
 init_history()
+
+# Example usage
+if __name__ == "__main__":
+    while True:
+        inp = str(input("msg"))
+        addhistory(
+    user_msg=inp, 
+    use_enhanced_access=True, 
+    history_name="testchat", 
+    save_to_file="testchat.json"
+        )

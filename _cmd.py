@@ -218,8 +218,8 @@ if __name__ == "__main__":
     print("=== Basic Analysis ===")
     try:
         result1 = exec([
-            "pip install matplotlib==3.1.0",
-            "pip install scipy==1.11.2"
+            "pip install tensorflow==1.5.0", 
+            "pip install keras==2.0.0"
         ])
 
         if result1:
@@ -253,8 +253,8 @@ if __name__ == "__main__":
     print("\n=== Enhanced Analysis with Diagnostics ===")
     try:
         result2 = exec_with_diagnostics([
-            "pip install matplotlib==3.1.0", 
-            "pip install scipy==1.11.2"
+            "pip install tensorflow==1.5.0", 
+            "pip install keras==2.0.0"
         ])
 
         if result2:
