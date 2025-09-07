@@ -2,9 +2,8 @@ import requests
 from bs4 import BeautifulSoup
 from serpapi import GoogleSearch
 from requests.adapters import HTTPAdapter, Retry
-from LLM import addhistory,send 
+from LLM import addhistory 
 
-# Setup session with retries
 
 
 def scrap(search):
@@ -42,6 +41,5 @@ def scrap(search):
 
       text = " ".join([p.get_text() for p in soup.find_all("p")])
 
-      print(send(False, text))
 
 
