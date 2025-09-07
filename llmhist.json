@@ -1,0 +1,11 @@
+{
+    "1": {
+        "user": "hey do yo know me",
+        "llm": {
+            "main_response": "I don\u2019t have any prior information about you, so I don\u2019t know you yet. Could you tell me a bit about yourself or what you\u2019d like to discuss?",
+            "memory_request": null,
+            "summarize_answer_prompt_in_100_words": "The assistant explains that it lacks any prior information about the user, so it does not know them. It politely asks the user to provide some details or specify the topic they'd like to discuss, inviting further conversation.",
+            "summarize_question_prompt_in_100_words": "The user asks if the assistant knows them, essentially inquiring about any prior knowledge or recognition of the user."
+        }
+    }
+}
