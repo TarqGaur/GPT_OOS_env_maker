@@ -4,7 +4,7 @@ import re
 
 client = OpenAI(
     base_url="https://router.huggingface.co/v1",
-    api_key="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"  
+    api_key="*******"  
 )
 
 # Enhanced system prompt that teaches the model about memory access
@@ -216,6 +216,5 @@ while True:
             print("❓ Unknown command. Type /help for available commands.")
         continue
     
-    # Process regular conversation
     if user_input:
         addhistory(user_input, use_memory_access)
